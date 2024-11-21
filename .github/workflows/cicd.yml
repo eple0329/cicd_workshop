@@ -1,0 +1,65 @@
+# 해당 Workflow의 이름
+name: CICD_WORKSHOP
+
+# 해당 Github Actions를 실행할 상태를 나타냄
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  ci: # ci라는 이름으로 Job을 하나 생성하겠다
+    name: CI
+    runs-on: ubuntu-latest
+    env: 
+      ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      ECR_URL: ${{ secrets.ECR_URI }}
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+      #체크아웃
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # ECR 로그인
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      # 도커 이미지 생성
+      - name: Docker image Build, Tag
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+
+      # ECR에 빌드한 이미지 Push
+      - name: AWS ECR Push
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+  cd: # cd라는 이름으로 Job을 실행하겠다.
+    needs: ci
+    name: CD
+    runs-on: ubuntu-latest
+    steps:
+      # Deploy to EC2
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            sudo docker login --username AWS --password-stdin ${{ secrets.ECR_URI }} && sudo docker pull ${{ secrets.ECR_URI }}:${{ github.sha }}
+            sudo docker run -d --rm -p 8080:8000 ${{ secrets.ECR_URI }}:${{ github.sha }}
+          
